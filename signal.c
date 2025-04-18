@@ -4,13 +4,14 @@
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 
 void handler(int sig, siginfo_t *info, void *context){
         printf("Игра начинается\n");
 }
 
-void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset);
-void player2(pid_t pid, int i, int n, sigset_t set);
+void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset, const struct timespec *timeout);
+void player2(pid_t pid, int i, int n, sigset_t set, const struct timespec *timeout);
 
 int main(int argc, char* argv[]){
     pid_t pid = fork();
@@ -37,34 +38,37 @@ int main(int argc, char* argv[]){
 	perror("can't catch");
 
     srand(time(NULL));
+    struct timespec timeout = {1, 0};
 
     for (int i = 1; i <= 10; i++){
         if (i%2 == 1){
 	    if (pid > 0)
-	        player2(pid, i, n, set);
+	        player2(pid, i, n, set, &timeout);
 
 	    else
-	        player1(getppid(), i, n, set, oldset);
+	        player1(getppid(), i, n, set, oldset, &timeout);
 	}
 	
 	else {
 	    if (pid > 0)
-	        player1(pid, i, n, set, oldset);
+	        player1(pid, i, n, set, oldset, &timeout);
 
 	    else
-	        player2(getppid(), i, n, set);
+	        player2(getppid(), i, n, set, &timeout);
 	}
     }
 
+    int status;
     if (pid > 0)
-	wait(NULL);
+	waitpid(pid, &status, 0);
  
     return 0;
 }
 
 
-void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset){
-    sigsuspend(&oldset);
+void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset, const struct timespec *timeout){
+    siginfo_t si;
+    sigtimedwait(&set, &si, timeout);
     
     int guess = 0;
     while (1){
@@ -72,8 +76,7 @@ void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset){
         union sigval value;
         value.sival_int = guess;
         sigqueue(pid, SIGRTMIN+1, value);
-        siginfo_t si;
-        int sig = sigwaitinfo(&set, &si);
+        int sig = sigtimedwait(&set, &si, timeout);
         if (sig == SIGUSR1)
             break;
         else if (sig == SIGUSR2)
@@ -82,7 +85,7 @@ void player1(pid_t pid, int i, int n, sigset_t set, sigset_t oldset){
 
 }
 
-void player2(pid_t pid, int i, int n, sigset_t set){
+void player2(pid_t pid, int i, int n, sigset_t set, const struct timespec *timeout){
     int target = rand() % n + 1;
     int attempt = 0;
     printf("Раунд %d:\n", i);
@@ -91,10 +94,11 @@ void player2(pid_t pid, int i, int n, sigset_t set){
         perror("kill");
         exit(1);
     }
-
+    int sig;
     while (1){
-        siginfo_t si;
-	int sig = sigwaitinfo(&set, &si);
+        siginfo_t si; 
+	sig = sigtimedwait(&set, &si, timeout);
+
 	if (sig == SIGRTMIN+1){
 	    int guess = si.si_value.sival_int;
 	    attempt++;
@@ -107,5 +111,9 @@ void player2(pid_t pid, int i, int n, sigset_t set){
 	    else
 		kill(pid, SIGUSR2);
          }
+
+	else if (sig == -1){
+	    exit(1);
+	}
     }
 }
